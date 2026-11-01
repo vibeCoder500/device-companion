@@ -5,19 +5,19 @@
   "downloads": [
     {
       "file": "device-companion-install.ps1",
-      "sha256": "341ee923823554709949e98e8f1f1d5ba88473e30fd5a1a392d41c589d70fee1"
+      "sha256": "5ef93058e905b9a2f744597a617d82eda980144bf4090f3475178e1b10d7007e"
     },
     {
       "file": "device-companion-install.sh",
-      "sha256": "97819ea9f4075ede4415d468fe4dc6f5cd7bf36677151c548d277c8221c2e9df"
+      "sha256": "9133d00b9a1a3a9e6e254d734e289711a63f8d09bbdb877b788c39f8d76e19a2"
     },
     {
       "file": "uninstall.ps1",
-      "sha256": "64f766900b9101e631832e86938f4bc10f0125e88d356c65360cdc1c622e3f99"
+      "sha256": "8b38cccbbdc34f35dbb42cb1b2214f0fb4bf13f7b864da441779a3cbe717f770"
     },
     {
       "file": "uninstall.sh",
-      "sha256": "9047865f465ade377e5bfcbac283c96305f5a1cabb3a85ed3e55a96f6f9f3575"
+      "sha256": "883147ac83f5afbe402a05c78ae0fc19703ef4cb73f87c00b9f14f52ce7ef5e3"
     }
   ]
 }

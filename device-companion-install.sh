@@ -3,7 +3,8 @@
 # Device Companion - optional event desktop experience (macOS)
 #
 # With consent, installs surprise on-screen animations and sound effects.
-# Runs until local midnight or until you quit. No automatic login startup.
+# Waits 15 minutes, then uses 15-30 second pauses. Removes itself at the
+# next local 4:00 pm after the cooldown. Animations do not restart at login.
 # This is an event experience, not a device patching or security update tool.
 #
 # One-line install & start:
@@ -25,10 +26,39 @@ PID_FILE="${INSTALL_DIR}/zoomies.pid"
 PLIST_PATH="${HOME}/Library/LaunchAgents/com.corpfun.zoomies.plist"
 REPO_RAW_BASE="${ZOOMIES_BASE_URL:-https://raw.githubusercontent.com/vibeCoder500/device-companion/main}"
 FALLBACK_BASE="https://raw.githubusercontent.com/vibeCoder500/device-companion/main"
+CLEANUP_LABEL="com.devicecompanion.cleanup"
+CLEANUP_PLIST="${HOME}/Library/LaunchAgents/${CLEANUP_LABEL}.plist"
+CLEANUP_SCRIPT="${INSTALL_DIR}/cleanup.sh"
 
-MIN_GAP_SEC="${ZOOMIES_MIN_GAP:-5}"
-MAX_GAP_SEC="${ZOOMIES_MAX_GAP:-15}"
+MIN_GAP_SEC="${ZOOMIES_MIN_GAP:-15}"
+MAX_GAP_SEC="${ZOOMIES_MAX_GAP:-30}"
 MUTE="${ZOOMIES_MUTE:-0}"
+COOLDOWN_SEC=900
+
+stop_cleanup() {
+  if launchctl print "gui/$(id -u)/${CLEANUP_LABEL}" >/dev/null 2>&1; then
+    launchctl bootout "gui/$(id -u)/${CLEANUP_LABEL}"
+  fi
+  if [[ -f "${CLEANUP_PLIST}" ]]; then rm -f "${CLEANUP_PLIST}"; fi
+}
+
+choose_timing() {
+  completed_ms="$(/usr/bin/osascript -l JavaScript -e 'Date.now()')"
+  if [[ ! "${completed_ms}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[ERROR] Could not determine the installation completion time." >&2
+    exit 1
+  fi
+  STARTS_AT_MS="$(( completed_ms + COOLDOWN_SEC * 1000 ))"
+  STARTS_AT="$(( STARTS_AT_MS / 1000 ))"
+  EXPIRES_AT="$(date -v16H -v0M -v0S +%s)"
+  if (( STARTS_AT_MS >= EXPIRES_AT * 1000 )); then
+    EXPIRES_AT="$(date -v+1d -v16H -v0M -v0S +%s)"
+  fi
+  printf '%s\n' "${STARTS_AT_MS}" > "${INSTALL_DIR}/starts-at"
+  printf '%s\n' "${EXPIRES_AT}" > "${INSTALL_DIR}/expires-at"
+  printf 'window.HEAD_IMAGES._startsAt = %s;\nwindow.HEAD_IMAGES._expiresAt = %s;\n' \
+    "${STARTS_AT_MS}" "$((EXPIRES_AT * 1000))" > "${INSTALL_DIR}/timing.js"
+}
 
 stop_companion() {
   if launchctl list com.corpfun.zoomies >/dev/null 2>&1; then
@@ -65,6 +95,7 @@ stop_companion() {
 
 if [[ "${1:-}" == "--uninstall" || "${1:-}" == "uninstall" ]]; then
   echo "[*] Stopping and uninstalling Device Companion..."
+  stop_cleanup
   stop_companion
   if [[ -L "${INSTALL_DIR}" ]]; then
     echo "[ERROR] Refusing to delete a linked installation directory." >&2
@@ -85,11 +116,11 @@ if (( MIN_GAP_SEC < 1 || MAX_GAP_SEC > 3600 || MAX_GAP_SEC < MIN_GAP_SEC )); the
   echo "[ERROR] Animation gaps must satisfy 1 <= minimum <= maximum <= 3600." >&2
   exit 1
 fi
-EXPIRES_AT="$(date -v+1d -v0H -v0M -v0S +%s)"
 echo "Device Companion - optional event desktop experience"
-echo "Adds surprise on-screen animations and sound effects every ${MIN_GAP_SEC}-${MAX_GAP_SEC} seconds."
-echo "Runs in a click-through background overlay until local midnight, or quit using the DC menu."
-echo "Does not apply device patches or restart automatically when you sign in."
+echo "Waits 15 minutes after installation, then adds surprise animations and sounds with ${MIN_GAP_SEC}-${MAX_GAP_SEC} second pauses."
+echo "Automatically removes itself at the next local 4:00 pm after cooldown, or uninstall sooner."
+echo "If today is too late, removal moves to tomorrow. A cleanup-only launch agent catches up after wake or sign-in."
+echo "Does not apply device patches or restart animations automatically when you sign in."
 echo "Sound: ${MUTE} (0 = enabled, 1 or true = muted)."
 echo "Installs files only under: ${INSTALL_DIR}"
 echo "Uninstall: bash \"${INSTALL_DIR}/uninstall.sh\""
@@ -107,6 +138,7 @@ fi
 
 echo "[*] Installing Device Companion..."
 mkdir -p "${HEADS_DIR}"
+stop_cleanup
 stop_companion
 
 HEAD_FILES=(
@@ -141,7 +173,6 @@ done
   done
   printf "  \"_minGapMs\": %d,\n" "$((MIN_GAP_SEC * 1000))"
   printf "  \"_maxGapMs\": %d,\n" "$((MAX_GAP_SEC * 1000))"
-  printf "  \"_expiresAt\": %d,\n" "$((EXPIRES_AT * 1000))"
   printf "  \"_muted\": %s\n" "$([[ "${MUTE}" == "1" || "${MUTE}" == "true" ]] && echo "true" || echo "false")"
   printf "};\n"
 } > "${INSTALL_DIR}/heads.js"
@@ -204,6 +235,7 @@ cat > "${INSTALL_DIR}/overlay.html" <<'EOF'
   @keyframes cr-peck   { from { rotate: -8deg; } to { rotate: 6deg; } }
 </style>
 <script src="./heads.js"></script>
+<script src="./timing.js"></script>
 </head>
 <body>
 <div id="stage"></div>
@@ -686,8 +718,8 @@ cat > "${INSTALL_DIR}/overlay.html" <<'EOF'
   }
 
   const stage = document.getElementById('stage');
-  const minGapMs = window.HEAD_IMAGES._minGapMs || 5000;
-  const maxGapMs = window.HEAD_IMAGES._maxGapMs || 15000;
+  const minGapMs = window.HEAD_IMAGES._minGapMs || 15000;
+  const maxGapMs = window.HEAD_IMAGES._maxGapMs || 30000;
   let lastPerson, lastEdge;
   let heading = Math.random() * 2 * Math.PI;
   let seq = 0;
@@ -700,6 +732,10 @@ cat > "${INSTALL_DIR}/overlay.html" <<'EOF'
 
   function triggerRun() {
     if (Date.now() >= window.HEAD_IMAGES._expiresAt) return;
+    if (Date.now() < window.HEAD_IMAGES._startsAt) {
+      setTimeout(triggerRun, window.HEAD_IMAGES._startsAt - Date.now());
+      return;
+    }
     const roll = Math.random();
     const style = roll < 0.4 ? 'pop' : roll < 0.75 ? 'dash' : 'zoom';
     const count = style === 'pop' ? 1 : Math.random() < 0.55 ? 1 : Math.random() < 0.67 ? 2 : 3;
@@ -771,7 +807,7 @@ cat > "${INSTALL_DIR}/overlay.html" <<'EOF'
     const image = new Image();
     image.src = window.HEAD_IMAGES[key];
     return image.decode();
-  })).then(() => setTimeout(triggerRun, 1000)).catch(error => {
+  })).then(() => setTimeout(triggerRun, Math.max(0, window.HEAD_IMAGES._startsAt - Date.now()))).catch(error => {
     console.error('Device Companion could not decode its images:', error);
   });
 })();
@@ -864,12 +900,46 @@ set -euo pipefail
 PLIST_PATH="${HOME}/Library/LaunchAgents/com.corpfun.zoomies.plist"
 INSTALL_DIR="${HOME}/.corpfun-zoomies"
 PID_FILE="${INSTALL_DIR}/zoomies.pid"
+CLEANUP_LABEL="com.devicecompanion.cleanup"
+CLEANUP_PLIST="${HOME}/Library/LaunchAgents/${CLEANUP_LABEL}.plist"
+SCHEDULED=false
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "[ERROR] This uninstaller requires macOS." >&2
   exit 1
 fi
+if [[ "${1:-}" == "--scheduled-cleanup" ]]; then
+  SCHEDULED=true
+  script_dir="$(dirname "${BASH_SOURCE[0]}")"
+  if [[ -L "${script_dir}" ]]; then
+    echo "[ERROR] Refusing cleanup of a linked installation directory." >&2
+    exit 1
+  fi
+  INSTALL_DIR="$(cd "${script_dir}" && pwd -P)"
+  if [[ "${INSTALL_DIR##*/}" != ".corpfun-zoomies" ]]; then
+    echo "[ERROR] Scheduled cleanup must run inside its own installation." >&2
+    exit 1
+  fi
+  PID_FILE="${INSTALL_DIR}/zoomies.pid"
+  cutoff="$(cat "${INSTALL_DIR}/expires-at")"
+  if [[ ! "${cutoff}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[ERROR] Invalid automatic uninstall deadline." >&2
+    exit 1
+  fi
+  if (( $(date +%s) < cutoff )); then exit 0; fi
+fi
+if [[ -f "${INSTALL_DIR}/cleanup-plist-path" ]]; then
+  CLEANUP_PLIST="$(cat "${INSTALL_DIR}/cleanup-plist-path")"
+  if [[ "${CLEANUP_PLIST##*/}" != "${CLEANUP_LABEL}.plist" || "${CLEANUP_PLIST%/*}" != */Library/LaunchAgents ]]; then
+    echo "[ERROR] Refusing to remove an unexpected cleanup registration." >&2
+    exit 1
+  fi
+fi
 echo "[*] Stopping and uninstalling Device Companion..."
+if [[ "${SCHEDULED}" == false ]] && launchctl print "gui/$(id -u)/${CLEANUP_LABEL}" >/dev/null 2>&1; then
+  launchctl bootout "gui/$(id -u)/${CLEANUP_LABEL}"
+fi
+if [[ -f "${CLEANUP_PLIST}" ]]; then rm -f "${CLEANUP_PLIST}"; fi
 if launchctl list com.corpfun.zoomies >/dev/null 2>&1; then
   launchctl bootout "gui/$(id -u)/com.corpfun.zoomies"
 fi
@@ -899,12 +969,50 @@ if [[ -L "${INSTALL_DIR}" ]]; then
   echo "[ERROR] Refusing to delete a linked installation directory." >&2
   exit 1
 fi
-if [[ -d "${INSTALL_DIR}" ]]; then rm -rf "${HOME}/.corpfun-zoomies"; fi
+if [[ "${INSTALL_DIR##*/}" != ".corpfun-zoomies" ]]; then
+  echo "[ERROR] Refusing deletion outside the companion installation." >&2
+  exit 1
+fi
+if [[ -d "${INSTALL_DIR}" ]]; then rm -rf "${INSTALL_DIR}"; fi
 echo "[OK] Device Companion has been completely uninstalled."
+if [[ "${SCHEDULED}" == true ]] && launchctl print "gui/$(id -u)/${CLEANUP_LABEL}" >/dev/null 2>&1; then
+  launchctl bootout "gui/$(id -u)/${CLEANUP_LABEL}"
+fi
 EOF
 chmod +x "${INSTALL_DIR}/uninstall.sh"
 
-printf '%s\n' "${EXPIRES_AT}" > "${INSTALL_DIR}/expires-at"
+cat > "${CLEANUP_SCRIPT}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+exec /bin/bash "${directory}/uninstall.sh" --scheduled-cleanup
+EOF
+chmod +x "${CLEANUP_SCRIPT}"
+mkdir -p "${HOME}/Library/LaunchAgents"
+escaped_script="$(printf '%s' "${CLEANUP_SCRIPT}" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+cat > "${CLEANUP_PLIST}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${CLEANUP_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>${escaped_script}</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+</dict>
+</plist>
+EOF
+printf '%s\n' "${CLEANUP_PLIST}" > "${INSTALL_DIR}/cleanup-plist-path"
+choose_timing
+if ! launchctl bootstrap "gui/$(id -u)" "${CLEANUP_PLIST}"; then
+  echo "[ERROR] Could not register automatic cleanup; installation will not continue." >&2
+  stop_cleanup
+  bash "${INSTALL_DIR}/uninstall.sh"
+  exit 1
+fi
+choose_timing
 nohup /usr/bin/osascript -l JavaScript "${INSTALL_DIR}/run-overlay.jxa.js" >"${INSTALL_DIR}/worker-error.log" 2>&1 &
 worker_pid=$!
 printf '%s\n' "${worker_pid}" > "${PID_FILE}"
@@ -916,13 +1024,15 @@ if ! kill -0 "${worker_pid}" 2>/dev/null || [[ ! -f "${INSTALL_DIR}/zoomies.read
   echo "[ERROR] Device Companion failed to start:" >&2
   cat "${INSTALL_DIR}/worker-error.log" >&2
   stop_companion
+  bash "${INSTALL_DIR}/uninstall.sh"
   exit 1
 fi
 
-echo "[OK] Device Companion's native window has started on macOS."
-echo "   * Frequency : every ${MIN_GAP_SEC}-${MAX_GAP_SEC} seconds"
+echo "[OK] Device Companion is installed and cooling down on macOS."
+echo "   * Quiet interval : ${MIN_GAP_SEC}-${MAX_GAP_SEC} seconds"
 echo "   * Scope     : full_screen (click-through overlay across all spaces)"
-echo "   * End time  : local midnight; no automatic login startup"
+echo "   * First animation : $(date -r "${STARTS_AT}")"
+echo "   * Automatic uninstall : $(date -r "${EXPIRES_AT}")"
 echo ""
 echo "To uninstall anytime after the event, run:"
 echo "   ~/.corpfun-zoomies/uninstall.sh"

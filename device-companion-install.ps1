@@ -3,7 +3,8 @@
     Device Companion - optional event desktop experience (Windows)
 .DESCRIPTION
     With your consent, installs surprise on-screen animations and sound effects.
-    Runs in a click-through overlay until local midnight or until you quit.
+    Waits 15 minutes, then runs a click-through overlay with 15-30 second pauses.
+    Automatically uninstalls at the next local 4:00 pm after the cooldown.
     Does not apply device updates or restart automatically when you sign in.
 
     One-line install & start:
@@ -18,14 +19,16 @@ param(
     [switch]$Once,
     [switch]$Accept,
     [ValidateRange(1, 3600)]
-    [int]$MinGapSec = $(if ($env:ZOOMIES_MIN_GAP) { [int]$env:ZOOMIES_MIN_GAP } else { 5 }),
+    [int]$MinGapSec = $(if ($env:ZOOMIES_MIN_GAP) { [int]$env:ZOOMIES_MIN_GAP } else { 15 }),
     [ValidateRange(1, 3600)]
-    [int]$MaxGapSec = $(if ($env:ZOOMIES_MAX_GAP) { [int]$env:ZOOMIES_MAX_GAP } else { 15 }),
+    [int]$MaxGapSec = $(if ($env:ZOOMIES_MAX_GAP) { [int]$env:ZOOMIES_MAX_GAP } else { 30 }),
     [ValidateSet('full_screen', 'focused_window')]
     [string]$Scope = $(if ($env:ZOOMIES_SCOPE) { $env:ZOOMIES_SCOPE } else { 'full_screen' }),
     [switch]$Mute = $(if ($env:ZOOMIES_MUTE -eq '1' -or $env:ZOOMIES_MUTE -eq 'true') { $true } else { $false }),
     [string]$RepoRawBase = $(if ($env:ZOOMIES_BASE_URL) { $env:ZOOMIES_BASE_URL } else { 'https://raw.githubusercontent.com/vibeCoder500/device-companion/main' }),
-    [DateTime]$ExpiresAtUtc = [DateTime]::Today.AddDays(1).ToUniversalTime()
+    [Nullable[DateTime]]$ExpiresAtUtc,
+    [ValidateRange(0, 86400)]
+    [int]$InitialDelaySec = 900
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,6 +45,37 @@ $ReadyFile  = Join-Path $InstallDir 'zoomies.ready'
 $ErrorFile  = Join-Path $InstallDir 'worker-error.log'
 $RegRunPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $RegRunName = 'CorpFunZoomies'
+$sha = [Security.Cryptography.SHA256]::Create()
+try {
+    $pathBytes = [Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($InstallDir).ToLowerInvariant())
+    $taskId = ([BitConverter]::ToString($sha.ComputeHash($pathBytes))).Replace('-', '').Substring(0, 16)
+} finally {
+    $sha.Dispose()
+}
+$CleanupTaskName = "DeviceCompanionCleanup-$taskId"
+
+function Get-CompanionCleanupAt {
+    param([DateTime]$InstalledAtUtc, [int]$CooldownSeconds = 900)
+    $local = $InstalledAtUtc.ToUniversalTime().ToLocalTime()
+    $first = $InstalledAtUtc.ToUniversalTime().AddSeconds($CooldownSeconds).ToLocalTime()
+    $cutoff = $local.Date.AddHours(16)
+    while ($cutoff -le $first) { $cutoff = $cutoff.AddDays(1) }
+    return $cutoff.ToUniversalTime()
+}
+
+function Register-CompanionCleanup {
+    param([DateTime]$CleanupAtUtc)
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+        -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$UninstFile`" -ScheduledCleanup -CleanupAtUtc $($CleanupAtUtc.ToUniversalTime().ToString('o'))"
+    $time = New-ScheduledTaskTrigger -Once -At $CleanupAtUtc.ToLocalTime()
+    $logon = New-ScheduledTaskTrigger -AtLogOn -User $identity
+    $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::FromMinutes(2))
+    Register-ScheduledTask -TaskName $CleanupTaskName -TaskPath '\' -Action $action `
+        -Trigger @($time, $logon) -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+}
 
 $HeadFiles = @(
     'captain.webp', 'captain-back.webp',
@@ -1086,6 +1120,7 @@ namespace CorpFunZoomies
         private readonly bool _mute;
         private readonly bool _once;
         private readonly DateTime _expiresAtUtc;
+        private readonly DateTime _startsAtUtc;
         private readonly string _readyFile;
         private System.Windows.Forms.NotifyIcon _trayIcon;
 
@@ -1129,7 +1164,7 @@ namespace CorpFunZoomies
             public CaricatureVisual BackVis;
         }
 
-        public ZoomiesOverlayWindow(string headsDir, int minGapSec, int maxGapSec, string scope, bool mute, bool once, DateTime expiresAtUtc)
+        public ZoomiesOverlayWindow(string headsDir, int minGapSec, int maxGapSec, string scope, bool mute, bool once, DateTime expiresAtUtc, DateTime startsAtUtc)
         {
             _minGapMs = Math.Max(1000, minGapSec * 1000);
             _maxGapMs = Math.Max(_minGapMs, maxGapSec * 1000);
@@ -1137,6 +1172,7 @@ namespace CorpFunZoomies
             _mute = mute;
             _once = once;
             _expiresAtUtc = expiresAtUtc.ToUniversalTime();
+            _startsAtUtc = startsAtUtc.ToUniversalTime();
             _readyFile = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(headsDir), "zoomies.ready");
             _heading = _rng.NextDouble() * 2.0 * Math.PI;
 
@@ -1176,7 +1212,7 @@ namespace CorpFunZoomies
                 };
                 _expiryTimer.Start();
                 File.WriteAllText(_readyFile, "running");
-                ScheduleNext(_once ? 250 : _rng.Next(800, 2200));
+                ScheduleNext((int)Math.Max(100.0, Math.Ceiling((_startsAtUtc - DateTime.UtcNow).TotalMilliseconds)));
             };
         }
 
@@ -1343,6 +1379,16 @@ namespace CorpFunZoomies
 
         private void TriggerZoomieRun()
         {
+            if (DateTime.UtcNow >= _expiresAtUtc)
+            {
+                Close();
+                return;
+            }
+            if (DateTime.UtcNow < _startsAtUtc)
+            {
+                ScheduleNext((int)Math.Max(100.0, Math.Ceiling((_startsAtUtc - DateTime.UtcNow).TotalMilliseconds)));
+                return;
+            }
             PositionOverActiveTarget();
             double W = Math.Max(400, Width);
             double H = Math.Max(300, Height);
@@ -1830,12 +1876,14 @@ namespace CorpFunZoomies
 
 $WorkerScriptContent = @'
 param(
-    [int]$MinGapSec = 5,
-    [int]$MaxGapSec = 15,
+    [int]$MinGapSec = 15,
+    [int]$MaxGapSec = 30,
     [string]$Scope = 'full_screen',
     [switch]$Mute,
     [switch]$Once,
-    [DateTime]$ExpiresAtUtc = [DateTime]::Today.AddDays(1).ToUniversalTime()
+    [DateTime]$ExpiresAtUtc,
+    [DateTime]$StartsAtUtc,
+    [string]$CleanupTaskName
 )
 $ErrorActionPreference = 'Stop'
 $InstallDir = $PSScriptRoot
@@ -1863,7 +1911,7 @@ try {
     if (-not $app) {
         $app = New-Object System.Windows.Application
     }
-    $win = New-Object CorpFunZoomies.ZoomiesOverlayWindow($HeadsDir, $MinGapSec, $MaxGapSec, $Scope, [bool]$Mute, [bool]$Once, $ExpiresAtUtc)
+    $win = New-Object CorpFunZoomies.ZoomiesOverlayWindow($HeadsDir, $MinGapSec, $MaxGapSec, $Scope, [bool]$Mute, [bool]$Once, $ExpiresAtUtc, $StartsAtUtc)
     [void]$app.Run($win)
 } catch {
     $errorWriter.WriteLine($_.ToString())
@@ -1873,26 +1921,71 @@ try {
         Remove-Item -LiteralPath $PidFile -Force
     }
     $errorWriter.Dispose()
+    if ([DateTime]::UtcNow -ge $ExpiresAtUtc.ToUniversalTime() -and $CleanupTaskName) {
+        $cleanup = Get-ScheduledTask -TaskPath '\' -ErrorAction Stop |
+            Where-Object { $_.TaskName -eq $CleanupTaskName }
+        if ($cleanup) { Start-ScheduledTask -TaskName $CleanupTaskName -TaskPath '\' -ErrorAction Stop }
+    }
 }
 '@
 
 $UninstScriptContent = @'
-param([switch]$StopOnly)
+param(
+    [switch]$StopOnly,
+    [switch]$ScheduledCleanup,
+    [Nullable[DateTime]]$CleanupAtUtc
+)
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT' -or [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
     throw 'Device Companion requires Windows and a per-user LOCALAPPDATA directory.'
 }
 $InstallDir = Join-Path $env:LOCALAPPDATA 'CorpFunZoomies'
+if ($ScheduledCleanup) {
+    if ([string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        throw 'Scheduled cleanup must run from the installed uninstall script.'
+    }
+    $InstallDir = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($PSCommandPath))
+    if ([IO.Path]::GetFileName($PSCommandPath) -ne 'uninstall.ps1' -or [IO.Path]::GetFileName($InstallDir) -ne 'CorpFunZoomies') {
+        throw 'Refusing scheduled cleanup outside its own companion installation.'
+    }
+}
 $PidFile    = Join-Path $InstallDir 'zoomies.pid'
 $WorkerFile = Join-Path $InstallDir 'run-zoomies.ps1'
 $RegRunPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $RegRunName = 'CorpFunZoomies'
+$sha = [Security.Cryptography.SHA256]::Create()
+try {
+    $pathBytes = [Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($InstallDir).ToLowerInvariant())
+    $taskId = ([BitConverter]::ToString($sha.ComputeHash($pathBytes))).Replace('-', '').Substring(0, 16)
+} finally {
+    $sha.Dispose()
+}
+$CleanupTaskName = "DeviceCompanionCleanup-$taskId"
+
+if ($ScheduledCleanup) {
+    if ($null -eq $CleanupAtUtc) {
+        throw 'Scheduled cleanup requires its original uninstall deadline.'
+    }
+    if ([DateTime]::UtcNow -lt $CleanupAtUtc.ToUniversalTime()) {
+        return
+    }
+}
 
 Write-Host "[*] Stopping Device Companion..." -ForegroundColor Yellow
 $workerPattern = [regex]::Escape($WorkerFile)
 Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" |
     Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match $workerPattern } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+    ForEach-Object {
+        $process = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+        if ($process -and -not $process.HasExited) {
+            try {
+                Stop-Process -Id $process.Id -Force -ErrorAction Stop
+            } catch {
+                if ($_.CategoryInfo.Category -ne [Management.Automation.ErrorCategory]::ObjectNotFound) { throw }
+            }
+            if (-not $process.WaitForExit(5000)) { throw 'The companion worker did not stop.' }
+        }
+    }
 foreach ($file in @($PidFile, (Join-Path $InstallDir 'zoomies.ready'))) {
     if (Test-Path -LiteralPath $file) {
         Remove-Item -LiteralPath $file -Force
@@ -1907,8 +2000,18 @@ if (-not $StopOnly -and (Test-Path -LiteralPath $InstallDir)) {
     }
     Remove-Item -LiteralPath $InstallDir -Recurse -Force
 }
+if (-not $StopOnly) {
+    $tasks = Get-ScheduledTask -TaskPath '\' -ErrorAction Stop |
+        Where-Object { $_.TaskName -eq $CleanupTaskName }
+    foreach ($task in $tasks) {
+        if ($task.Actions.Count -ne 1 -or $task.Actions[0].Arguments -notmatch [regex]::Escape((Join-Path $InstallDir 'uninstall.ps1'))) {
+            throw 'Refusing to remove a cleanup task with an unexpected action.'
+        }
+        Unregister-ScheduledTask -TaskName $CleanupTaskName -TaskPath '\' -Confirm:$false -ErrorAction Stop
+    }
+}
 if ($StopOnly) {
-    Write-Host '[OK] Device Companion stopped. It will not restart automatically.' -ForegroundColor Green
+    Write-Host '[OK] Device Companion stopped. Its automatic cleanup job is still scheduled.' -ForegroundColor Green
 } else {
     Write-Host '[OK] Device Companion has been completely uninstalled.' -ForegroundColor Green
 }
@@ -1921,15 +2024,18 @@ if ($Uninstall) {
 if ($MaxGapSec -lt $MinGapSec) {
     throw 'MaxGapSec must be greater than or equal to MinGapSec.'
 }
-if ($ExpiresAtUtc.ToUniversalTime() -le [DateTime]::UtcNow) {
+if ($null -ne $ExpiresAtUtc -and $ExpiresAtUtc.ToUniversalTime() -le [DateTime]::UtcNow) {
     throw 'The end time must be in the future.'
 }
 Write-Host ''
 Write-Host 'Device Companion - optional event desktop experience' -ForegroundColor Cyan
 Write-Host "Adds surprise on-screen animations and $(if ($Mute) { 'muted' } else { 'enabled' }) sound effects."
-Write-Host "Runs in a click-through background overlay every $MinGapSec-$MaxGapSec seconds."
-Write-Host "Stops at $($ExpiresAtUtc.ToLocalTime().ToString('f')), or use the tray menu to quit."
-Write-Host 'Does not apply device patches or restart automatically when you sign in.'
+Write-Host "Waits $InitialDelaySec seconds after installation before the first animation."
+Write-Host "Then runs a click-through overlay with $MinGapSec-$MaxGapSec second pauses."
+Write-Host 'Automatically removes itself at the next local 4:00 pm after the cooldown.'
+Write-Host "If today is too late, cleanup is tomorrow. You can quit or uninstall sooner."
+Write-Host 'A cleanup-only scheduled task also checks for overdue removal at sign-in or wake.'
+Write-Host 'Does not apply device patches or restart the animations automatically when you sign in.'
 Write-Host "Installs files only under: $InstallDir"
 Write-Host "Uninstall: powershell -NoProfile -ExecutionPolicy Bypass -File `"$UninstFile`""
 if (-not $Accept) {
@@ -1946,44 +2052,68 @@ Set-Content -Path $CsFile -Value $CSharpSource -Encoding ASCII -Force
 Set-Content -Path $WorkerFile -Value $WorkerScriptContent -Encoding ASCII -Force
 Set-Content -Path $UninstFile -Value $UninstScriptContent -Encoding ASCII -Force
 
-if ($RunWorker -or $Once) {
-    & $WorkerFile -MinGapSec $MinGapSec -MaxGapSec $MaxGapSec -Scope $Scope -Mute:$Mute -Once:$Once -ExpiresAtUtc $ExpiresAtUtc
-    return
-}
-
 Write-Host '[*] Installing Device Companion...' -ForegroundColor Cyan
-
-$argList = @(
-    '-NoProfile',
-    '-ExecutionPolicy', 'Bypass',
-    '-WindowStyle', 'Hidden',
-    '-STA',
-    '-File', "`"$WorkerFile`"",
-    '-MinGapSec', $MinGapSec,
-    '-MaxGapSec', $MaxGapSec,
-    '-Scope', $Scope,
-    '-ExpiresAtUtc', $ExpiresAtUtc.ToUniversalTime().ToString('o')
-)
-if ($Mute) { $argList += '-Mute' }
 
 if ((Test-Path -LiteralPath $RegRunPath) -and (Get-Item -LiteralPath $RegRunPath).GetValueNames() -contains $RegRunName) {
     Remove-ItemProperty -LiteralPath $RegRunPath -Name $RegRunName -Force
 }
 
-$proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -WindowStyle Hidden -PassThru
-Set-Content -Path $PidFile -Value $proc.Id -Encoding ASCII -Force
-$deadline = [DateTime]::UtcNow.AddSeconds(20)
-while (-not (Test-Path -LiteralPath $ReadyFile) -and -not $proc.HasExited -and [DateTime]::UtcNow -lt $deadline) {
-    Start-Sleep -Milliseconds 200
-    $proc.Refresh()
+try {
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        $installedAt = [DateTime]::UtcNow
+        $cleanupAt = if ($null -ne $ExpiresAtUtc) { $ExpiresAtUtc.ToUniversalTime() } else {
+            Get-CompanionCleanupAt -InstalledAtUtc $installedAt -CooldownSeconds $InitialDelaySec
+        }
+        Register-CompanionCleanup -CleanupAtUtc $cleanupAt
+        $installedAt = [DateTime]::UtcNow
+        $finalCutoff = if ($null -ne $ExpiresAtUtc) { $cleanupAt } else {
+            Get-CompanionCleanupAt -InstalledAtUtc $installedAt -CooldownSeconds $InitialDelaySec
+        }
+        if ($finalCutoff -eq $cleanupAt) { break }
+    }
+    if ($finalCutoff -ne $cleanupAt) { throw 'The local clock changed during cleanup scheduling. Try installation again.' }
+    $startsAt = $installedAt.AddSeconds($InitialDelaySec)
+    @{
+        installedAtUtc = $installedAt.ToString('o')
+        firstAnimationAtUtc = $startsAt.ToString('o')
+        cleanupAtUtc = $cleanupAt.ToString('o')
+        cleanupTask = $CleanupTaskName
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir 'installation.json') -Encoding ASCII
+
+    if ($RunWorker -or $Once) {
+        & $WorkerFile -MinGapSec $MinGapSec -MaxGapSec $MaxGapSec -Scope $Scope -Mute:$Mute -Once:$Once `
+            -ExpiresAtUtc $cleanupAt -StartsAtUtc $startsAt -CleanupTaskName $CleanupTaskName
+        return
+    }
+    $argList = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-STA',
+        '-File', "`"$WorkerFile`"", '-MinGapSec', $MinGapSec, '-MaxGapSec', $MaxGapSec,
+        '-Scope', $Scope, '-ExpiresAtUtc', $cleanupAt.ToString('o'),
+        '-StartsAtUtc', $startsAt.ToString('o'), '-CleanupTaskName', $CleanupTaskName
+    )
+    if ($Mute) { $argList += '-Mute' }
+    $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -WindowStyle Hidden -PassThru
+    Set-Content -Path $PidFile -Value $proc.Id -Encoding ASCII -Force
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while (-not (Test-Path -LiteralPath $ReadyFile) -and -not $proc.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 200
+        $proc.Refresh()
+    }
+    if ($proc.HasExited -or -not (Test-Path -LiteralPath $ReadyFile)) {
+        $details = if (Test-Path -LiteralPath $ErrorFile) { Get-Content -LiteralPath $ErrorFile -Raw } else { 'No ready signal was received.' }
+        throw "Device Companion failed to start. $details"
+    }
+} catch {
+    $failure = $_
+    try { & ([scriptblock]::Create($UninstScriptContent)) } catch {
+        Write-Warning "Installation rollback failed: $($_.Exception.Message)"
+    }
+    throw $failure
 }
-if ($proc.HasExited -or -not (Test-Path -LiteralPath $ReadyFile)) {
-    if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
-    $details = if (Test-Path -LiteralPath $ErrorFile) { Get-Content -LiteralPath $ErrorFile -Raw } else { 'No ready signal was received.' }
-    throw "Device Companion failed to start. $details"
-}
-Write-Host "[OK] Device Companion is running. (PID: $($proc.Id))" -ForegroundColor Green
-Write-Host "   * Frequency : every $MinGapSec-$MaxGapSec seconds" -ForegroundColor Gray
+Write-Host "[OK] Device Companion is installed and cooling down. (PID: $($proc.Id))" -ForegroundColor Green
+Write-Host "   * First animation : $($startsAt.ToLocalTime().ToString('f'))" -ForegroundColor Gray
+Write-Host "   * Automatic uninstall : $($cleanupAt.ToLocalTime().ToString('f'))" -ForegroundColor Gray
+Write-Host "   * Quiet interval : $MinGapSec-$MaxGapSec seconds" -ForegroundColor Gray
 Write-Host "   * Scope     : $Scope (click-through overlay on your active monitor/window)" -ForegroundColor Gray
 Write-Host "   * Sound     : $(if ($Mute) { 'Muted' } else { 'Enabled' })" -ForegroundColor Gray
 Write-Host ""
