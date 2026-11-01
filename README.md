@@ -17,6 +17,8 @@ It is **not** a device patching, patch scanning, or security update tool. It doe
 
 Run in PowerShell, review the disclosure, and type **YES** to install:
 
+The compact Windows notice is: "device companion which may use desktop visual and sound." The automatic-cleanup information and confirmation prompt are still shown.
+
 ```powershell
 irm https://raw.githubusercontent.com/vibeCoder500/device-companion/main/device-companion-install.ps1 | iex
 ```

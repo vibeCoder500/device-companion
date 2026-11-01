@@ -2030,16 +2030,8 @@ if ($null -ne $ExpiresAtUtc -and $ExpiresAtUtc.ToUniversalTime() -le [DateTime]:
     throw 'The end time must be in the future.'
 }
 Write-Host ''
-Write-Host 'Device Companion - optional event desktop experience' -ForegroundColor Cyan
-Write-Host "Adds surprise on-screen animations and $(if ($Mute) { 'muted' } else { 'enabled' }) sound effects."
-Write-Host "Waits $InitialDelaySec seconds after installation before the first animation."
-Write-Host "Then runs a click-through overlay with $MinGapSec-$MaxGapSec second pauses."
-Write-Host 'Automatically removes itself at the next local 4:00 pm after the cooldown.'
-Write-Host "If today is too late, cleanup is tomorrow. You can quit or uninstall sooner."
-Write-Host 'A cleanup-only scheduled task also checks for overdue removal at sign-in or wake.'
-Write-Host 'Does not apply device patches or restart the animations automatically when you sign in.'
-Write-Host "Installs files only under: $InstallDir"
-Write-Host "Uninstall: powershell -NoProfile -ExecutionPolicy Bypass -File `"$UninstFile`""
+Write-Host 'device companion which may use desktop visual and sound.' -ForegroundColor Cyan
+Write-Host 'Includes a cleanup-only job; automatic removal is at the next local 4:00 pm after cooldown.'
 if (-not $Accept) {
     $answer = Read-Host 'Install and start Device Companion? Type YES to continue'
     if ($answer.Trim() -cne 'YES') {
