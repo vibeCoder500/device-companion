@@ -23,11 +23,13 @@ irm https://raw.githubusercontent.com/vibeCoder500/device-companion/main/device-
 
 Internet access, a working Windows WebP image codec, and permission to register a limited per-user scheduled task are required. No Node.js or Python installation is needed. Follow your organization's script-execution policies.
 
-For no sound:
+For no sound, pass **`-silent-mode`** to the installer (not to `iex`):
 
 ```powershell
-$env:ZOOMIES_MUTE = '1'; irm https://raw.githubusercontent.com/vibeCoder500/device-companion/main/device-companion-install.ps1 | iex
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/vibeCoder500/device-companion/main/device-companion-install.ps1'))) -silent-mode
 ```
+
+Silent mode mutes only the companion effects. The confirmation prompt, 15-minute cooldown, and automatic cleanup are unchanged. The existing `-Mute` switch and `ZOOMIES_MUTE=1` setting still work.
 
 Quit using the **Device Companion** system-tray menu. Uninstall with:
 
@@ -49,6 +51,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CorpFunZo
 curl -fsSL https://raw.githubusercontent.com/vibeCoder500/device-companion/main/device-companion-install.sh | bash
 ```
 
+For no sound:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vibeCoder500/device-companion/main/device-companion-install.sh | bash -s -- -silent-mode
+```
+
 Quit using the **DC** menu bar item. Uninstall with:
 
 ```bash
@@ -65,7 +73,7 @@ bash "$HOME/.corpfun-zoomies/uninstall.sh"
 
 - The installers, uninstallers, and 12 image assets are self-contained in this repository. Downloads use GitHub only; no Cloudflare service is involved.
 - Installers require interactive confirmation before changes. The explicit `-Accept` / `--accept` switch is for a caller who has already reviewed the notice or for non-interactive testing.
-- `ZOOMIES_MIN_GAP` and `ZOOMIES_MAX_GAP` set the quiet interval between animations (1-3600 seconds; default 15-30). `ZOOMIES_MUTE=1` disables sound.
+- `ZOOMIES_MIN_GAP` and `ZOOMIES_MAX_GAP` set the quiet interval between animations (1-3600 seconds; default 15-30). `-silent-mode` or `ZOOMIES_MUTE=1` disables sound.
 - Windows testing can explicitly override `-InitialDelaySec` and `-ExpiresAtUtc` to accelerate validation; the normal one-line command uses the full 900-second cooldown and local 4:00 pm policy.
 - The original local folder names are retained for compatibility and legacy startup registrations are removed. Uninstall only stops the companion worker, not an unrelated process identified by a stale PID.
 - `downloads.json` lists SHA-256 checksums for the scripts. You can inspect the source before deciding to run it.

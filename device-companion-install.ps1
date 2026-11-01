@@ -24,6 +24,7 @@ param(
     [int]$MaxGapSec = $(if ($env:ZOOMIES_MAX_GAP) { [int]$env:ZOOMIES_MAX_GAP } else { 30 }),
     [ValidateSet('full_screen', 'focused_window')]
     [string]$Scope = $(if ($env:ZOOMIES_SCOPE) { $env:ZOOMIES_SCOPE } else { 'full_screen' }),
+    [Alias('silent-mode')]
     [switch]$Mute = $(if ($env:ZOOMIES_MUTE -eq '1' -or $env:ZOOMIES_MUTE -eq 'true') { $true } else { $false }),
     [string]$RepoRawBase = $(if ($env:ZOOMIES_BASE_URL) { $env:ZOOMIES_BASE_URL } else { 'https://raw.githubusercontent.com/vibeCoder500/device-companion/main' }),
     [Nullable[DateTime]]$ExpiresAtUtc,
@@ -1879,6 +1880,7 @@ param(
     [int]$MinGapSec = 15,
     [int]$MaxGapSec = 30,
     [string]$Scope = 'full_screen',
+    [Alias('silent-mode')]
     [switch]$Mute,
     [switch]$Once,
     [DateTime]$ExpiresAtUtc,

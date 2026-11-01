@@ -34,6 +34,19 @@ MIN_GAP_SEC="${ZOOMIES_MIN_GAP:-15}"
 MAX_GAP_SEC="${ZOOMIES_MAX_GAP:-30}"
 MUTE="${ZOOMIES_MUTE:-0}"
 COOLDOWN_SEC=900
+ASSUME_YES=false
+UNINSTALL_REQUESTED=false
+while (( $# > 0 )); do
+  case "$1" in
+    -silent-mode|--silent-mode) MUTE=1 ;;
+    --accept) ASSUME_YES=true ;;
+    --uninstall|uninstall) UNINSTALL_REQUESTED=true ;;
+    *)
+      echo "[ERROR] Unknown installer option: $1" >&2
+      exit 1 ;;
+  esac
+  shift
+done
 
 stop_cleanup() {
   if launchctl print "gui/$(id -u)/${CLEANUP_LABEL}" >/dev/null 2>&1; then
@@ -93,7 +106,7 @@ stop_companion() {
   rm -f "${INSTALL_DIR}/zoomies.ready"
 }
 
-if [[ "${1:-}" == "--uninstall" || "${1:-}" == "uninstall" ]]; then
+if [[ "${UNINSTALL_REQUESTED}" == true ]]; then
   echo "[*] Stopping and uninstalling Device Companion..."
   stop_cleanup
   stop_companion
@@ -124,7 +137,7 @@ echo "Does not apply device patches or restart animations automatically when you
 echo "Sound: ${MUTE} (0 = enabled, 1 or true = muted)."
 echo "Installs files only under: ${INSTALL_DIR}"
 echo "Uninstall: bash \"${INSTALL_DIR}/uninstall.sh\""
-if [[ "${1:-}" != "--accept" ]]; then
+if [[ "${ASSUME_YES}" != true ]]; then
   printf "Install and start Device Companion? Type YES to continue: " >/dev/tty
   if ! read -r answer </dev/tty; then
     echo "[ERROR] Interactive consent requires a terminal." >&2
