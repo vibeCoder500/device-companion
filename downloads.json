@@ -9,7 +9,7 @@
     },
     {
       "file": "device-companion-install.sh",
-      "sha256": "7edbcf7ddb0ac418e44c36a3f8fe8200b2f7613c047b4d1823517f87faa898fe"
+      "sha256": "0a2e784026b7ba449de89a655c8ecd83c37e0a7f5c8ea2b0eebdd571e2e9aa95"
     },
     {
       "file": "uninstall.ps1",

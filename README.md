@@ -71,6 +71,12 @@ Offline uninstall:
 bash "$HOME/.corpfun-zoomies/uninstall.sh"
 ```
 
+### macOS startup troubleshooting
+
+If an earlier installer failed with `-[NSNull count]: unrecognized selector`, rerun the current install command above. The readiness-file creation now passes a real empty `NSDictionary`, rather than JavaScript `null`, and the other native-null/error-reference arguments have been corrected.
+
+Startup errors name the failing phase before the installer rolls back its files and cleanup job. A successful install remains visually quiet during the 15-minute cooldown; the **DC** menu-bar item should be present immediately.
+
 ## Files and behavior
 
 - The installers, uninstallers, and 12 image assets are self-contained in this repository. Downloads use GitHub only; no Cloudflare service is involved.

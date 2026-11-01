@@ -830,81 +830,102 @@ cat > "${INSTALL_DIR}/overlay.html" <<'EOF'
 EOF
 
 cat > "${INSTALL_DIR}/run-overlay.jxa.js" <<'EOF'
-ObjC.import('Cocoa');
-ObjC.import('WebKit');
+let startupPhase = 'loading Cocoa and WebKit';
+try {
+  ObjC.import('Cocoa');
+  ObjC.import('WebKit');
 
-const app = $.NSApplication.sharedApplication;
-app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
-app.finishLaunching;
+  startupPhase = 'initializing the desktop application';
+  const app = $.NSApplication.sharedApplication;
+  app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+  app.finishLaunching;
 
-const installDir = $('~/.corpfun-zoomies').stringByExpandingTildeInPath;
-const expiresPath = installDir.stringByAppendingPathComponent($('expires-at'));
-const expiresText = $.NSString.stringWithContentsOfFileEncodingError(expiresPath, $.NSUTF8StringEncoding, null);
-const expiresAt = Number(ObjC.unwrap(expiresText)) * 1000;
-if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-  throw new Error('Device Companion end time is missing or expired.');
-}
-
-ObjC.registerSubclass({
-  name: 'DeviceCompanionExpiry',
-  superclass: 'NSObject',
-  methods: {
-    'expire:': {
-      types: ['void', ['id']],
-      implementation: function () { app.terminate(null); }
-    }
+  startupPhase = 'reading the cleanup deadline';
+  const installDir = $('~/.corpfun-zoomies').stringByExpandingTildeInPath;
+  const expiresPath = installDir.stringByAppendingPathComponent($('expires-at'));
+  const readError = Ref();
+  const expiresText = $.NSString.stringWithContentsOfFileEncodingError(expiresPath, $.NSUTF8StringEncoding, readError);
+  if (expiresText.isNil()) {
+    const error = readError[0];
+    const detail = error && !error.isNil() ? ObjC.unwrap(error.localizedDescription) : 'No readable cleanup deadline file.';
+    throw new Error('Could not read the cleanup deadline: ' + detail);
   }
-});
-const expiryTarget = $.DeviceCompanionExpiry.alloc.init;
-const expiryTimer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(
-  (expiresAt - Date.now()) / 1000, expiryTarget, $('expire:'), null, false
-);
+  const expiresAt = Number(ObjC.unwrap(expiresText)) * 1000;
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    throw new Error('Device Companion end time is missing or expired.');
+  }
 
-const statusItem = $.NSStatusBar.systemStatusBar.statusItemWithLength($.NSVariableStatusItemLength);
-statusItem.button.setTitle($('DC'));
-const menu = $.NSMenu.alloc.init;
-const quit = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent($('Quit Device Companion'), $('terminate:'), $(''));
-quit.setTarget(app);
-menu.addItem(quit);
-statusItem.setMenu(menu);
+  startupPhase = 'registering the expiry timer';
+  ObjC.registerSubclass({
+    name: 'DeviceCompanionExpiry',
+    superclass: 'NSObject',
+    methods: {
+      'expire:': {
+        types: ['void', ['id']],
+        implementation: function () { app.terminate($()); }
+      }
+    }
+  });
+  const expiryTarget = $.DeviceCompanionExpiry.alloc.init;
+  const expiryTimer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(
+    (expiresAt - Date.now()) / 1000, expiryTarget, $('expire:'), $(), false
+  );
 
-const screen = $.NSScreen.mainScreen;
-const frame = screen.frame;
+  startupPhase = 'creating the menu-bar control';
+  const statusItem = $.NSStatusBar.systemStatusBar.statusItemWithLength($.NSVariableStatusItemLength);
+  statusItem.button.setTitle($('DC'));
+  const menu = $.NSMenu.alloc.init;
+  const quit = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent($('Quit Device Companion'), $('terminate:'), $(''));
+  quit.setTarget(app);
+  menu.addItem(quit);
+  statusItem.setMenu(menu);
 
-const win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
-  frame,
-  0, // NSWindowStyleMaskBorderless
-  $.NSBackingStoreBuffered,
-  false
-);
+  startupPhase = 'creating the click-through window';
+  const screen = $.NSScreen.mainScreen;
+  const frame = screen.frame;
+  const win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
+    frame,
+    0, // NSWindowStyleMaskBorderless
+    $.NSBackingStoreBuffered,
+    false
+  );
 
-win.setOpaque(false);
-win.setBackgroundColor($.NSColor.clearColor);
-win.setIgnoresMouseEvents(true);
-win.setHasShadow(false);
-win.setLevel(1000); // NSScreenSaverWindowLevel
-win.setCollectionBehavior((1 << 0) | (1 << 4) | (1 << 8)); // CanJoinAllSpaces | Stationary | FullScreenAuxiliary
+  win.setOpaque(false);
+  win.setBackgroundColor($.NSColor.clearColor);
+  win.setIgnoresMouseEvents(true);
+  win.setHasShadow(false);
+  win.setLevel(1000); // NSScreenSaverWindowLevel
+  win.setCollectionBehavior((1 << 0) | (1 << 4) | (1 << 8)); // CanJoinAllSpaces | Stationary | FullScreenAuxiliary
 
-const config = $.WKWebViewConfiguration.alloc.init;
-config.mediaTypesRequiringUserActionForPlayback = 0;
+  startupPhase = 'loading the animation web view';
+  const config = $.WKWebViewConfiguration.alloc.init;
+  config.mediaTypesRequiringUserActionForPlayback = 0;
+  const viewFrame = $.NSMakeRect(0, 0, frame.size.width, frame.size.height);
+  const webview = $.WKWebView.alloc.initWithFrameConfiguration(viewFrame, config);
+  webview.setValueForKey($.NSNumber.numberWithBool(false), $('drawsBackground'));
 
-const viewFrame = $.NSMakeRect(0, 0, frame.size.width, frame.size.height);
-const webview = $.WKWebView.alloc.initWithFrameConfiguration(viewFrame, config);
-webview.setValueForKey($.NSNumber.numberWithBool(false), $('drawsBackground'));
+  const htmlPath = $.NSString.stringWithString('~/.corpfun-zoomies/overlay.html').stringByExpandingTildeInPath;
+  const htmlUrl = $.NSURL.fileURLWithPath(htmlPath);
+  const dirUrl = htmlUrl.URLByDeletingLastPathComponent;
+  webview.loadFileURLAllowingReadAccessToURL(htmlUrl, dirUrl);
 
-const htmlPath = $.NSString.stringWithString('~/.corpfun-zoomies/overlay.html').stringByExpandingTildeInPath;
-const htmlUrl = $.NSURL.fileURLWithPath(htmlPath);
-const dirUrl = htmlUrl.URLByDeletingLastPathComponent;
-webview.loadFileURLAllowingReadAccessToURL(htmlUrl, dirUrl);
+  win.setContentView(webview);
+  win.orderFrontRegardless;
 
-win.setContentView(webview);
-win.orderFrontRegardless;
-const readyPath = installDir.stringByAppendingPathComponent($('zoomies.ready'));
-$.NSFileManager.defaultManager.createFileAtPathContentsAttributes(
-  readyPath, $('running').dataUsingEncoding($.NSUTF8StringEncoding), null
-);
+  startupPhase = 'writing the startup-ready file';
+  const readyPath = installDir.stringByAppendingPathComponent($('zoomies.ready'));
+  const readyCreated = $.NSFileManager.defaultManager.createFileAtPathContentsAttributes(
+    readyPath, $('running').dataUsingEncoding($.NSUTF8StringEncoding), $.NSDictionary.dictionary
+  );
+  if (!readyCreated) {
+    throw new Error('Could not write the startup-ready file in the installation directory.');
+  }
 
-app.run;
+  startupPhase = 'running the desktop overlay';
+  app.run;
+} catch (error) {
+  throw new Error('Device Companion macOS failed while ' + startupPhase + ': ' + String(error));
+}
 EOF
 
 cat > "${INSTALL_DIR}/uninstall.sh" <<'EOF'
