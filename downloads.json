@@ -1,0 +1,23 @@
+{
+  "name": "Device Companion",
+  "repository": "vibeCoder500/device-companion",
+  "baseUrl": "https://raw.githubusercontent.com/vibeCoder500/device-companion/main",
+  "downloads": [
+    {
+      "file": "device-companion-install.ps1",
+      "sha256": "341ee923823554709949e98e8f1f1d5ba88473e30fd5a1a392d41c589d70fee1"
+    },
+    {
+      "file": "device-companion-install.sh",
+      "sha256": "97819ea9f4075ede4415d468fe4dc6f5cd7bf36677151c548d277c8221c2e9df"
+    },
+    {
+      "file": "uninstall.ps1",
+      "sha256": "64f766900b9101e631832e86938f4bc10f0125e88d356c65360cdc1c622e3f99"
+    },
+    {
+      "file": "uninstall.sh",
+      "sha256": "9047865f465ade377e5bfcbac283c96305f5a1cabb3a85ed3e55a96f6f9f3575"
+    }
+  ]
+}
