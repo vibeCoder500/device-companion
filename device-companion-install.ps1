@@ -9,9 +9,6 @@
 
     One-line install & start:
       irm https://raw.githubusercontent.com/vibeCoder500/device-companion/main/device-companion-install.ps1 | iex
-
-    One-line uninstall:
-      irm https://raw.githubusercontent.com/vibeCoder500/device-companion/main/uninstall.ps1 | iex
 #>
 param(
     [switch]$Uninstall,
