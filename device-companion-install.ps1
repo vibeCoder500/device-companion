@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Device Companion - optional event desktop experience (Windows)
+    Device Companion - desktop experience (Windows)
 .DESCRIPTION
-    With your consent, installs surprise on-screen animations and sound effects.
-    Waits 15 minutes, then runs a click-through overlay with 15-30 second pauses.
+    With your consent, installs the device companion to scan for device patching updates.
+    scans for 15 minutes, and then provides you with the remediation plan
     Automatically uninstalls at the next local 4:00 pm after the cooldown.
     Does not apply device updates or restart automatically when you sign in.
 
